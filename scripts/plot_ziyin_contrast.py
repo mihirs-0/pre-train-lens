@@ -6,7 +6,7 @@ Plot contrast between linear baselines and transformer plateau dynamics.
 import argparse
 import json
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Tuple
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -114,18 +114,32 @@ def _plot_panel_b(ax, linear: Dict) -> None:
     ax.text(0.02, 0.05, "Every component decays from step 0", transform=ax.transAxes)
 
 
-def _plot_panel_c(ax, transformer: Dict, planted: Dict) -> None:
+def _label_planted(planted: Dict) -> str:
+    cfg = planted.get("config", {})
+    batch_size = cfg.get("batch_size")
+    if batch_size is None:
+        return "Linear: selector gap"
+    return f"Linear: selector gap (bs={batch_size})"
+
+
+def _plot_panel_c(ax, transformer: Dict, planted_runs: List[Dict]) -> None:
     t_steps = transformer["steps"]
     t_gap = transformer["z_gap"]
-    p_steps = planted["eval_steps"]
-    p_gap = planted["selector_gap"]
 
     transformer_line = ax.plot(t_steps, t_gap, color="red", label="Transformer: Δ_z")[0]
     ax.set_ylabel("Transformer Δ_z (nats)", color="red")
     ax.tick_params(axis="y", labelcolor="red")
 
     ax_right = ax.twinx()
-    linear_line = ax_right.plot(p_steps, p_gap, color="blue", label="Linear: selector gap")[0]
+    linear_lines = []
+    labels = []
+    colors = plt.cm.Blues(np.linspace(0.5, 0.9, max(1, len(planted_runs))))
+    for idx, planted in enumerate(planted_runs):
+        p_steps = planted["eval_steps"]
+        p_gap = planted["selector_gap"]
+        line = ax_right.plot(p_steps, p_gap, color=colors[idx], label=_label_planted(planted))[0]
+        linear_lines.append(line)
+        labels.append(_label_planted(planted))
     ax_right.set_ylabel("Linear selector gap (MSE)", color="blue")
     ax_right.tick_params(axis="y", labelcolor="blue")
 
@@ -139,7 +153,9 @@ def _plot_panel_c(ax, transformer: Dict, planted: Dict) -> None:
     )
     ax.set_title("Selector Usage Comparison")
     ax.set_xlabel("Training Step")
-    ax.legend([transformer_line, linear_line], ["Transformer: Δ_z", "Linear: selector gap"], fontsize=8)
+    handles = [transformer_line] + linear_lines
+    legend_labels = ["Transformer: Δ_z"] + labels
+    ax.legend(handles, legend_labels, fontsize=8)
 
 
 def main() -> None:
@@ -156,6 +172,12 @@ def main() -> None:
         default="outputs",
         help="Base output directory",
     )
+    parser.add_argument(
+        "--planted-results",
+        nargs="+",
+        default=None,
+        help="Optional list of planted baseline JSON paths",
+    )
     args = parser.parse_args()
 
     _apply_style()
@@ -163,23 +185,29 @@ def main() -> None:
 
     transformer_path = output_dir / args.transformer_run / "candidate_eval_results.json"
     linear_path = output_dir / "linear_baseline" / "illconditioned_results.json"
-    planted_path = output_dir / "linear_baseline" / "planted_results.json"
+    default_planted = output_dir / "linear_baseline" / "planted_results.json"
 
     if not transformer_path.exists():
         raise FileNotFoundError(f"Missing transformer results: {transformer_path}")
     if not linear_path.exists():
         raise FileNotFoundError(f"Missing linear results: {linear_path}")
-    if not planted_path.exists():
-        raise FileNotFoundError(f"Missing planted results: {planted_path}")
+    planted_paths = []
+    if args.planted_results:
+        planted_paths = [Path(p) for p in args.planted_results]
+    else:
+        planted_paths = [default_planted]
+    for planted_path in planted_paths:
+        if not planted_path.exists():
+            raise FileNotFoundError(f"Missing planted results: {planted_path}")
 
     transformer = _load_json(transformer_path)
     linear = _load_json(linear_path)
-    planted = _load_json(planted_path)
+    planted_runs = [_load_json(path) for path in planted_paths]
 
     fig, axes = plt.subplots(1, 3, figsize=(18, 5))
     _plot_panel_a(axes[0], transformer, linear)
     _plot_panel_b(axes[1], linear)
-    _plot_panel_c(axes[2], transformer, planted)
+    _plot_panel_c(axes[2], transformer, planted_runs)
 
     fig.suptitle(
         "Ill-Conditioning vs Entropic Barrier: Qualitative Shape Comparison",

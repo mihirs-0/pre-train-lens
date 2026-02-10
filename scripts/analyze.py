@@ -21,6 +21,7 @@ from torch.utils.data import DataLoader
 from src.data import create_tokenizer_from_config, create_datasets_from_config, collate_fn
 from src.model import create_model_from_config
 from src.analysis import run_analysis, generate_all_figures
+from src.training.checkpoint import list_checkpoints
 
 
 def main():
@@ -29,6 +30,7 @@ def main():
     parser.add_argument("--output-dir", type=str, default="outputs", help="Base output directory")
     parser.add_argument("--probes", nargs="+", default=None, help="Probes to run (default: all)")
     parser.add_argument("--batch-size", type=int, default=64, help="Batch size for probing")
+    parser.add_argument("--every-n", type=int, default=1, help="Analyze every N-th checkpoint")
     parser.add_argument("--figures-only", action="store_true", help="Only generate figures from existing results")
     args = parser.parse_args()
     
@@ -70,6 +72,15 @@ def main():
             # No z in the sequence; skip z-dependent probes by default.
             args.probes = ["logit_lens"]
 
+        checkpoint_steps = None
+        if args.every_n > 1:
+            all_steps = list_checkpoints(experiment_dir / "checkpoints")
+            selected = {all_steps[0], all_steps[-1]}
+            for idx, step in enumerate(all_steps):
+                if idx % args.every_n == 0:
+                    selected.add(step)
+            checkpoint_steps = [step for step in all_steps if step in selected]
+
         # Run analysis
         print("\nRunning probes on checkpoints...")
         results = run_analysis(
@@ -78,6 +89,7 @@ def main():
             tokenizer=tokenizer,
             model_factory=model_factory,
             probe_names=args.probes,
+            checkpoint_steps=checkpoint_steps,
             batch_size=args.batch_size,
             device=device,
         )
