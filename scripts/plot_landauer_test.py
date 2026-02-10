@@ -262,11 +262,22 @@ def main():
 
     # Add note about experimental conditions
     batch_sizes = set(e["batch_size"] for e in experiments)
+    max_steps_set = set(e["max_steps"] for e in experiments)
+    notes = []
     if len(batch_sizes) > 1:
+        notes.append(
+            f"K=36 uses bs={max(batch_sizes)} (others bs={min(batch_sizes)}). "
+            "Different T_eff is a confound."
+        )
+    if len(max_steps_set) > 1:
+        notes.append(
+            f"K=36 uses {max(max_steps_set)//1000}K cosine schedule (others {min(max_steps_set)//1000}K). "
+            "Higher LR during K=36 transition inflates Q_trans."
+        )
+    if notes:
         fig.text(
             0.5, 0.01,
-            f"Note: K=36 uses bs={max(batch_sizes)} (others bs={min(batch_sizes)}). "
-            "Different T_eff is a confound — interpret ratios with caution.",
+            "Note: " + " ".join(notes) + " Interpret K=36 ratio with caution.",
             ha="center", fontsize=9, style="italic", color="red",
         )
 
