@@ -52,6 +52,7 @@ training:
   weight_decay: 0.01
   max_steps: 20000
   warmup_steps: 500
+  scheduler: "cosine"  # "cosine" (warmup + cosine decay) or "constant" (flat LR)
   # Checkpointing
   checkpoint_every: 200
   eval_every: 100

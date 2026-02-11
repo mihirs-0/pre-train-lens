@@ -147,10 +147,19 @@ def get_lr_scheduler(
     optimizer: torch.optim.Optimizer,
     warmup_steps: int,
     max_steps: int,
+    scheduler_type: str = "cosine",
 ) -> torch.optim.lr_scheduler.LambdaLR:
     """
-    Create learning rate scheduler with linear warmup and cosine decay.
+    Create learning rate scheduler.
+    
+    Args:
+        scheduler_type: "cosine" for linear warmup + cosine decay,
+                        "constant" for flat LR (no warmup, no decay).
     """
+    if scheduler_type == "constant":
+        return torch.optim.lr_scheduler.LambdaLR(optimizer, lambda step: 1.0)
+    
+    # Default: linear warmup + cosine decay
     def lr_lambda(step: int) -> float:
         if step < warmup_steps:
             return step / warmup_steps
@@ -192,10 +201,12 @@ def train(
     )
     
     # Setup scheduler
+    scheduler_type = getattr(cfg.training, "scheduler", "cosine")
     scheduler = get_lr_scheduler(
         optimizer,
         cfg.training.warmup_steps,
         cfg.training.max_steps,
+        scheduler_type=scheduler_type,
     )
     
     # Setup checkpointing

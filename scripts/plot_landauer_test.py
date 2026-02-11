@@ -19,6 +19,7 @@ from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
+import matplotlib.gridspec as gridspec
 
 
 # Consistent colors for each K
@@ -165,55 +166,100 @@ def panel_c_gradient_profiles(ax, experiments, output_dir):
     ax.set_xlim(left=0)
 
 
-def panel_d_ratio_bars(ax, experiments):
-    """Panel D: Landauer ratio Q_transition/log(K) bar chart."""
-    valid = [e for e in experiments if e["Q_transition_over_logK"] is not None]
-    if not valid:
-        ax.text(0.5, 0.5, "No data", transform=ax.transAxes, ha="center", fontsize=12)
-        ax.set_title("D. Landauer Ratio", fontsize=11, fontweight="bold")
+def panel_d_fit_and_residuals(ax_fit, ax_resid, experiments):
+    """Panel D: Q_trans vs log(K) with linear fit (top) and residuals (bottom)."""
+    valid = [e for e in experiments if e["Q_transition"] is not None]
+    if len(valid) < 2:
+        ax_fit.text(0.5, 0.5, "Insufficient data", transform=ax_fit.transAxes,
+                    ha="center", fontsize=12)
+        ax_fit.set_title("D. Fit & Residuals", fontsize=11, fontweight="bold")
         return
 
-    labels = [f"K={e['K']}" for e in valid]
-    ratios = [e["Q_transition_over_logK"] for e in valid]
-    colors = [get_color(e["K"]) for e in valid]
+    log_ks = np.array([e["log_K"] for e in valid])
+    q_trans = np.array([e["Q_transition"] for e in valid])
+    ks = np.array([e["K"] for e in valid])
 
-    x = np.arange(len(valid))
-    bars = ax.bar(x, ratios, color=colors, edgecolor="black", linewidth=0.8, width=0.5)
+    # --- Linear fit ---
+    coeffs = np.polyfit(log_ks, q_trans, 1)
+    slope, intercept = coeffs
+    predicted = np.polyval(coeffs, log_ks)
+    residuals = q_trans - predicted
 
-    # Add value labels on bars
-    for bar, ratio in zip(bars, ratios):
-        ax.text(
-            bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.0001,
-            f"{ratio:.5f}", ha="center", va="bottom", fontsize=8
-        )
+    # R²
+    ss_res = np.sum(residuals ** 2)
+    ss_tot = np.sum((q_trans - np.mean(q_trans)) ** 2)
+    r_sq = 1 - ss_res / ss_tot if ss_tot > 0 else 0
 
-    # Mean line
-    mean_ratio = np.mean(ratios)
-    std_ratio = np.std(ratios)
-    ax.axhline(mean_ratio, color="red", linestyle="--", linewidth=1.2, alpha=0.7,
-               label=f"Mean: {mean_ratio:.5f}")
+    # RMSE and max residual
+    rmse = np.sqrt(np.mean(residuals ** 2))
+    max_abs_resid = np.max(np.abs(residuals))
 
-    # Std band
-    ax.axhspan(mean_ratio - std_ratio, mean_ratio + std_ratio,
-               color="red", alpha=0.08)
+    # --- Top panel: scatter + fit ---
+    x_fit = np.linspace(min(log_ks) - 0.15, max(log_ks) + 0.15, 100)
+    y_fit = np.polyval(coeffs, x_fit)
 
-    ax.set_xticks(x)
-    ax.set_xticklabels(labels, fontsize=10)
-    ax.set_ylabel(r"$Q_{transition} / \log(K)$", fontsize=10)
-    ax.set_title("D. Landauer Ratio: Q_trans / log(K)", fontsize=11, fontweight="bold")
-    ax.legend(fontsize=9)
-    ax.grid(True, axis="y", alpha=0.3)
-    ax.set_ylim(bottom=0)
+    # Confidence-like band (±RMSE around fit)
+    ax_fit.fill_between(x_fit, y_fit - rmse, y_fit + rmse,
+                        color="#BBDEFB", alpha=0.4, label=f"±RMSE = {rmse:.2f}")
+    ax_fit.plot(x_fit, y_fit, "k-", linewidth=1.8, alpha=0.8,
+                label=f"Fit: {slope:.2f}·log(K) − {abs(intercept):.2f}   R²={r_sq:.3f}")
 
-    # Add CV annotation
-    if len(ratios) >= 2 and mean_ratio > 0:
-        cv = std_ratio / mean_ratio
-        ax.text(
-            0.95, 0.95,
-            f"CV = {cv:.3f}\n(std/mean)",
-            transform=ax.transAxes, ha="right", va="top",
-            fontsize=9, bbox=dict(boxstyle="round,pad=0.3", facecolor="wheat", alpha=0.5),
-        )
+    for e, pred_val in zip(valid, predicted):
+        color = get_color(e["K"])
+        ax_fit.scatter(e["log_K"], e["Q_transition"], color=color, s=90,
+                       zorder=5, edgecolors="black", linewidths=0.8)
+        ax_fit.annotate(f"K={e['K']}", (e["log_K"], e["Q_transition"]),
+                        textcoords="offset points", xytext=(8, 6), fontsize=9)
+
+    ax_fit.set_ylabel(r"$Q_{\mathrm{trans}}$", fontsize=10)
+    ax_fit.set_title("D. Linear Fit & Residuals", fontsize=11, fontweight="bold")
+    ax_fit.legend(fontsize=8, loc="upper left")
+    ax_fit.grid(True, alpha=0.3)
+    ax_fit.set_xlim(x_fit[0], x_fit[-1])
+    ax_fit.set_ylim(bottom=0)
+    plt.setp(ax_fit.get_xticklabels(), visible=False)
+
+    # --- Bottom panel: residuals ---
+    colors_resid = [get_color(k) for k in ks]
+    markerline, stemlines, baseline = ax_resid.stem(
+        log_ks, residuals, linefmt="-", markerfmt="o", basefmt="k-")
+    baseline.set_linewidth(0.8)
+    # Color each marker
+    for i, (ml, sl) in enumerate(zip(
+            [markerline] if len(valid) == 1 else [markerline],
+            stemlines if hasattr(stemlines, '__iter__') else [stemlines])):
+        pass  # stem doesn't easily support per-point colors; use scatter overlay
+
+    # Overlay colored scatter on top of stem markers
+    for e, res in zip(valid, residuals):
+        color = get_color(e["K"])
+        ax_resid.scatter(e["log_K"], res, color=color, s=70,
+                         zorder=5, edgecolors="black", linewidths=0.7)
+        pct = res / e["Q_transition"] * 100
+        ax_resid.annotate(f"{res:+.2f}\n({pct:+.1f}%)",
+                          (e["log_K"], res),
+                          textcoords="offset points",
+                          xytext=(12, -2 if res < 0 else 2),
+                          fontsize=7.5, ha="left",
+                          color="dimgray")
+
+    ax_resid.axhline(0, color="black", linewidth=0.8)
+    ax_resid.set_xlabel("log(K)", fontsize=10)
+    ax_resid.set_ylabel("Residual", fontsize=9)
+    ax_resid.grid(True, alpha=0.3)
+    ax_resid.set_xlim(x_fit[0], x_fit[-1])
+
+    # Symmetric y limits for residuals
+    y_lim = max(abs(residuals.min()), abs(residuals.max())) * 1.6
+    ax_resid.set_ylim(-y_lim, y_lim)
+
+    # Summary annotation
+    ax_resid.text(
+        0.98, 0.95,
+        f"RMSE = {rmse:.2f}\nmax |resid| = {max_abs_resid:.2f}",
+        transform=ax_resid.transAxes, ha="right", va="top",
+        fontsize=8, bbox=dict(boxstyle="round,pad=0.3", facecolor="lightyellow", alpha=0.7),
+    )
 
 
 def main():
@@ -247,18 +293,29 @@ def main():
     for e in experiments:
         print(f"  K={e['K']}: Q_trans={e['Q_transition']}, Q_trans/logK={e['Q_transition_over_logK']}")
 
-    # Create figure
-    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+    # Create figure with GridSpec: Panel D gets two vertically stacked axes
+    fig = plt.figure(figsize=(14, 10))
+    gs = gridspec.GridSpec(2, 2, figure=fig, hspace=0.35, wspace=0.3)
+
+    ax_a = fig.add_subplot(gs[0, 0])
+    ax_b = fig.add_subplot(gs[0, 1])
+    ax_c = fig.add_subplot(gs[1, 0])
+
+    # Panel D: split into fit (top 70%) and residuals (bottom 30%)
+    gs_d = gs[1, 1].subgridspec(2, 1, height_ratios=[3, 1], hspace=0.08)
+    ax_d_fit = fig.add_subplot(gs_d[0])
+    ax_d_resid = fig.add_subplot(gs_d[1], sharex=ax_d_fit)
+
     fig.suptitle(
-        "Landauer Dissipation Test — First Pass\n"
+        "Landauer Dissipation Test — Constant LR\n"
         "Does Q_transition scale with log(K)?",
         fontsize=13, fontweight="bold", y=0.98,
     )
 
-    panel_a_cumulative_dissipation(axes[0, 0], experiments)
-    panel_b_scaling(axes[0, 1], experiments)
-    panel_c_gradient_profiles(axes[1, 0], experiments, args.output_dir)
-    panel_d_ratio_bars(axes[1, 1], experiments)
+    panel_a_cumulative_dissipation(ax_a, experiments)
+    panel_b_scaling(ax_b, experiments)
+    panel_c_gradient_profiles(ax_c, experiments, args.output_dir)
+    panel_d_fit_and_residuals(ax_d_fit, ax_d_resid, experiments)
 
     # Add note about experimental conditions
     batch_sizes = set(e["batch_size"] for e in experiments)
@@ -281,7 +338,8 @@ def main():
             ha="center", fontsize=9, style="italic", color="red",
         )
 
-    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+    # Use subplots_adjust instead of tight_layout (incompatible with subgridspec)
+    fig.subplots_adjust(left=0.07, right=0.97, top=0.91, bottom=0.06, hspace=0.35, wspace=0.3)
 
     # Save
     save_path = Path(args.save_path)
