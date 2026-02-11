@@ -179,11 +179,14 @@ class DisambiguationDataset(Dataset):
         seed: int = 42,
         task: str = "bz_to_a",
         split_by_base: bool = False,
+        label_noise_prob: float = 0.0,
     ):
         self.mapping_data = mapping_data
         self.tokenizer = tokenizer
         self.split = split
         self.task = task
+        self.label_noise_prob = label_noise_prob
+        self._seed = seed
         
         # Split examples
         rng = random.Random(seed)
@@ -220,16 +223,44 @@ class DisambiguationDataset(Dataset):
         self._precompute_tokens()
         
     def _precompute_tokens(self):
-        """Pre-tokenize all examples for faster training."""
+        """Pre-tokenize all examples for faster training.
+        
+        If label_noise_prob > 0 and this is the training split, randomly
+        replaces the target A string with a wrong candidate (from the same
+        B group) for a fraction of examples. This implements Ziyin's label
+        noise experiment. The stored raw strings (tok["a"]) always reflect
+        the CLEAN ground truth for probing/analysis purposes.
+        """
         self.tokenized = []
+        noise_rng = random.Random(self._seed + 99999)
+        noise_count = 0
+        
         for ex in self.examples:
-            tok = self.tokenizer.encode_sequence(ex["b"], ex["z"], ex["a"], task=self.task)
-            # Store raw example too for probing
+            b_str, z_str, a_str = ex["b"], ex["z"], ex["a"]
+            
+            # Label noise: replace target A with wrong candidate (training only)
+            if (self.label_noise_prob > 0
+                    and self.split == "train"
+                    and self.task in ("bz_to_a", "b_to_a")
+                    and noise_rng.random() < self.label_noise_prob):
+                candidates = self.mapping_data.mappings[b_str]
+                wrong_a_list = [a for (_, a) in candidates if a != a_str]
+                if wrong_a_list:
+                    a_str = noise_rng.choice(wrong_a_list)
+                    noise_count += 1
+            
+            tok = self.tokenizer.encode_sequence(b_str, z_str, a_str, task=self.task)
+            # Store raw (CLEAN) example for probing — always ground truth
             tok["b"] = ex["b"]
             tok["z"] = ex["z"]
             tok["a"] = ex["a"]
             tok["base_string"] = ex["b"] if self.task in {"bz_to_a", "b_to_a"} else ex["a"]
             self.tokenized.append(tok)
+        
+        if noise_count > 0:
+            total = len(self.examples)
+            print(f"  [Label noise] {noise_count}/{total} training examples "
+                  f"({100 * noise_count / total:.1f}%) have corrupted targets")
     
     def __len__(self) -> int:
         return len(self.examples)
@@ -300,7 +331,7 @@ def create_datasets_from_config(cfg, tokenizer: CharTokenizer) -> Tuple[Disambig
     Factory function to create train/probe datasets from Hydra config.
     
     Returns:
-        (train_dataset, probe_dataset)
+        (train_dataset, probe_dataset, mapping_data)
     """
     # Generate mappings
     mapping_data = generate_mappings(
@@ -315,6 +346,9 @@ def create_datasets_from_config(cfg, tokenizer: CharTokenizer) -> Tuple[Disambig
         enforce_unique_a_first_char_per_b=getattr(cfg.data, "enforce_unique_a_first_char_per_b", False),
     )
     
+    # Label noise: only applied to training data, never to probe/eval
+    label_noise_prob = float(getattr(cfg.data, "label_noise_prob", 0.0))
+    
     train_dataset = DisambiguationDataset(
         mapping_data=mapping_data,
         tokenizer=tokenizer,
@@ -323,6 +357,7 @@ def create_datasets_from_config(cfg, tokenizer: CharTokenizer) -> Tuple[Disambig
         seed=cfg.experiment.seed,
         task=cfg.data.task,
         split_by_base=getattr(cfg.data, "split_by_base", False),
+        label_noise_prob=label_noise_prob,
     )
     
     probe_dataset = DisambiguationDataset(
@@ -333,6 +368,7 @@ def create_datasets_from_config(cfg, tokenizer: CharTokenizer) -> Tuple[Disambig
         seed=cfg.experiment.seed,
         task=cfg.data.task,
         split_by_base=getattr(cfg.data, "split_by_base", False),
+        label_noise_prob=0.0,  # eval is ALWAYS clean
     )
     
     return train_dataset, probe_dataset, mapping_data

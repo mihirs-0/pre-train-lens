@@ -26,6 +26,10 @@ data:
   split_by_base: true
   # Enforce distinct first chars for A among the K options per B
   enforce_unique_a_first_char_per_b: false
+  # Label noise: probability of replacing target A with wrong candidate
+  # during training. 0.0 = no noise (default). Only affects bz_to_a tasks.
+  # Eval/probes always use clean labels regardless of this setting.
+  label_noise_prob: 0.0
   
 # Tokenizer
 tokenizer:
