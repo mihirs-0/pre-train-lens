@@ -65,6 +65,9 @@ training:
   # Checkpointing
   checkpoint_every: 200
   eval_every: 100
+  # Early stopping: if set, training stops once candidate_loss < frac * log(K)
+  # for 20 consecutive evals.  null = disabled (default).
+  early_stop_convergence_frac: null
   
 # Probes
 probes:

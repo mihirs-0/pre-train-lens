@@ -298,13 +298,27 @@ def train(
     running_q_update = 0.0
     running_eta_eff_sum = 0.0
 
+    # Early stopping: stop when candidate_loss < 1% of log(K) for 20
+    # consecutive evals (1000 steps).  This is strictly more conservative
+    # than the 5% analysis threshold — all measurements (τ, success/fail)
+    # are locked in before this fires.  Only active when candidate eval is
+    # enabled and early_stop_threshold is set in the config.
+    _early_stop_threshold = None
+    _early_stop_patience = 20  # consecutive evals below threshold
+    _early_stop_counter = 0
+    _early_stopped = False
+    if _do_candidate_eval and hasattr(cfg.data, "k"):
+        _es_frac = getattr(cfg.training, "early_stop_convergence_frac", None)
+        if _es_frac is not None:
+            _early_stop_threshold = _es_frac * math.log(cfg.data.k)
+
     pbar = tqdm(total=cfg.training.max_steps, desc="Training")
 
-    while step < cfg.training.max_steps:
+    while step < cfg.training.max_steps and not _early_stopped:
         epoch += 1
 
         for batch in train_loader:
-            if step >= cfg.training.max_steps:
+            if step >= cfg.training.max_steps or _early_stopped:
                 break
 
             batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v
@@ -430,6 +444,19 @@ def train(
                 if _do_candidate_eval:
                     history["candidate_loss"].append(_cand_loss_val)
                     history["candidate_accuracy"].append(_cand_acc_val)
+
+                    if _early_stop_threshold is not None and _cand_loss_val is not None:
+                        if _cand_loss_val < _early_stop_threshold:
+                            _early_stop_counter += 1
+                            if _early_stop_counter >= _early_stop_patience:
+                                print(f"\n[Early stop] Converged at step {step} "
+                                      f"(cand_loss={_cand_loss_val:.6f} < "
+                                      f"{_early_stop_threshold:.6f} for "
+                                      f"{_early_stop_patience} evals)")
+                                _early_stopped = True
+                        else:
+                            _early_stop_counter = 0
+
                 history["grad_norm_sq"].append(avg_grad_norm_sq)
                 history["grad_norm_sq_clipped"].append(avg_grad_norm_sq_clipped)
                 history["clipping_active"].append(frac_clipped)
@@ -494,6 +521,10 @@ def train(
             pbar.update(1)
 
     pbar.close()
+
+    if _early_stopped:
+        history["early_stopped"] = True
+        history["early_stopped_step"] = step
 
     # ---- Final checkpoint ----
     final_train_loss = history["train_loss"][-1] if history["train_loss"] else 0.0

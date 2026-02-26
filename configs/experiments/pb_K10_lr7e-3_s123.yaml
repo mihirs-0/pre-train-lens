@@ -39,6 +39,7 @@ training:
   scheduler: "constant"
   checkpoint_every: 999999
   eval_every: 50
+  early_stop_convergence_frac: 0.01
 
 probes:
   enabled: []
