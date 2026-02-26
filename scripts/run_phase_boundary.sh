@@ -38,7 +38,7 @@ cd "$(dirname "$0")/.."
 REPO_DIR="$(pwd)"
 
 # ── Configuration ──
-N_PARALLEL=3              # Concurrent training processes (3 fits well on 3090)
+N_PARALLEL=4              # Concurrent training processes (4 fits on RTX 4000 Ada: 50 GB RAM, 9 vCPU)
 PROGRESS_FILE="outputs/phase_boundary_progress.txt"
 REUSE_MAP="configs/phase_boundary_reuse_map.txt"
 RUN_LIST="configs/phase_boundary_run_list.txt"
