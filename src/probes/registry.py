@@ -8,6 +8,9 @@ from .attention_to_z import AttentionToZProbe
 from .logit_lens import LogitLensProbe
 from .causal_patching import CausalPatchingProbe
 from .random_z_eval import RandomZEvalProbe
+from .gradient_snr import GradientSNRProbe
+from .isotropy import IsotropyProbe
+from .multihead_decomposition import MultiheadDecompositionProbe
 
 
 # Registry of all available probes
@@ -16,6 +19,9 @@ PROBE_REGISTRY: Dict[str, Type[BaseProbe]] = {
     "logit_lens": LogitLensProbe,
     "causal_patching": CausalPatchingProbe,
     "random_z_eval": RandomZEvalProbe,
+    "gradient_snr": GradientSNRProbe,
+    "isotropy": IsotropyProbe,
+    "multihead_decomposition": MultiheadDecompositionProbe,
 }
 
 
