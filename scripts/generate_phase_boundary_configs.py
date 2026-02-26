@@ -73,7 +73,7 @@ training:
   max_steps: 200000
   warmup_steps: 0
   scheduler: "constant"
-  checkpoint_every: 5000
+  checkpoint_every: 999999
   eval_every: 50
 
 probes:
