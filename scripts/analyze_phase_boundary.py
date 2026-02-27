@@ -93,7 +93,8 @@ def find_history(k, lr, seed):
 def classify_run(steps, cand_loss, log_k, max_steps=200000):
     """
     Determine SUCCESS or FAIL for a single run.
-    SUCCESS: candidate_loss < 5% of log(K) at any point.
+    SUCCESS: candidate_loss crosses below 5% of log(K) AND stays below
+    at the end of training (guards against transient dips that revert).
     Also computes τ = t_end - t_start using 95%/5% thresholds.
     """
     hi = 0.95 * log_k
@@ -106,7 +107,7 @@ def classify_run(steps, cand_loss, log_k, max_steps=200000):
             t_end_idx = i
             break
 
-    if t_end_idx is None:
+    if t_end_idx is None or cand_loss[-1] >= lo:
         return {
             "success": False,
             "tau": None,
