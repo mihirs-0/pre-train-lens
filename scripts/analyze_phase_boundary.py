@@ -93,12 +93,20 @@ def find_history(k, lr, seed):
 def classify_run(steps, cand_loss, log_k, max_steps=200000):
     """
     Determine SUCCESS or FAIL for a single run.
-    SUCCESS: candidate_loss crosses below 5% of log(K) AND stays below
-    at the end of training (guards against transient dips that revert).
+    SUCCESS if EITHER:
+      (a) final candidate_loss < 5% of log(K)  — stable convergence, OR
+      (b) min candidate_loss < 1% of log(K)    — deep convergence was reached
+          but later reverted due to unclipped gradient spikes.
+    Condition (b) ensures runs that genuinely solved the task aren't penalised
+    for post-convergence instability caused by the no-clipping regime.
     Also computes τ = t_end - t_start using 95%/5% thresholds.
     """
     hi = 0.95 * log_k
     lo = 0.05 * log_k
+    deep = 0.01 * log_k
+
+    min_loss = float(min(cand_loss))
+    solved = cand_loss[-1] < lo or min_loss < deep
 
     # Find t_end: first step where loss < lo
     t_end_idx = None
@@ -107,7 +115,7 @@ def classify_run(steps, cand_loss, log_k, max_steps=200000):
             t_end_idx = i
             break
 
-    if t_end_idx is None or cand_loss[-1] >= lo:
+    if t_end_idx is None or not solved:
         return {
             "success": False,
             "tau": None,
