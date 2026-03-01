@@ -226,6 +226,9 @@ Both grokking~\citep{power2022grokking, nanda2023progress} and our task exhibit 
 Weight displacement analysis (Appendix~\ref{app:displacement}) confirms the hidden progress picture of~\citet{barak2022hidden}: during the plateau, $\|W(t{+}\Delta) - W(t)\|_F$ is large and approximately constant (${\sim}11$ per 200-step interval at $K{=}20$), but consecutive displacement directions are \emph{uncorrelated} ($\cos\theta \approx 0.04$).
 At $\tau$, direction consistency snaps to ${\sim}0.8$ (Figure~\ref{fig:posthoc}b): the transition is not the onset of weight movement but the onset of \emph{coherent} movement---a threshold crossing where gradient coherence exceeds a critical value and positive feedback locks in directed descent~\citep{chen2024hidden}.
 The irreversibility is confirmed by trajectory forensics (Appendix~\ref{app:forensics}): no near-boundary run that initiates the transition reverts to the plateau.
+Hessian eigenvalue tracking (Appendix~\ref{app:hessian}) reveals that the plateau is a \emph{saddle point} ($\lambda_\text{min} < 0$ throughout), not a local minimum---ruling out spinodal decomposition.
+The most negative eigenvalue is ${\sim}10^3{\times}$ smaller than $\lambda_\text{max}$, explaining why the optimizer random-walks for many steps before finding the descent channel.
+At the transition, $\lambda_\text{max}$ spikes $10$--$20{\times}$ as the model descends through a narrow, steep canyon.
 
 \paragraph{Connections to recent theory.}
 We tested predictions from six theoretical frameworks against our checkpoint and training-history data (Appendices~\ref{app:synergy}--\ref{app:adamw}).
@@ -546,6 +549,46 @@ Near-boundary runs (those with partial convergence across seeds) raise the quest
 \end{figure}
 
 Of 24 near-boundary runs: 6 converge (smoothed final ${<}\,5\%$ of $\log K$), 5 are in active descent (smoothed loss still declining at step 200k), 2 show stalled dynamics (end slope marginally positive but loss remains well below $50\%$ of $\log K$), and 11 never breach the plateau. Zero runs exhibit smoothed reversion from below $50\%$ back above $80\%$ of $\log K$. The partial-convergence zone is a slow-convergence zone: once the transition initiates, it completes given sufficient budget. This rules out ``failed transitions'' as a distinct phenomenon and supports the two-regime (fast convergence / critical slowing down) interpretation of the phase diagram.
+
+\section{Hessian Eigenvalue Tracking}
+\label{app:hessian}
+
+We track the extreme eigenvalues of the loss Hessian through training via power iteration with Hessian-vector products (50 iterations, 512-example mini-batch) for $K \in \{10, 20, 36\}$ at $\eta = 10^{-3}$.
+
+The spinodal decomposition prediction is: $\lambda_\text{min} > 0$ during the plateau (locally stable uniform solution), crossing zero at $\tau$ (solution becomes linearly unstable), and $\lambda_\text{min} < 0$ post-$\tau$. This is \textbf{falsified}: the plateau is a saddle point ($\lambda_\text{min} < 0$) throughout, and the converged solution is a genuine local minimum ($\lambda_\text{min} \geq 0$).
+
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=\textwidth]{outputs/paper_figures/fig_hessian_eigenvalues.pdf}
+  \caption{\textbf{Hessian eigenvalue trajectories.} Top: $\lambda_\text{max}$ (red) and $\lambda_\text{min}$ (blue) vs.\ step. $\lambda_\text{max}$ spikes $10$--$20\times$ during the transition then decays. $\lambda_\text{min}$ is tiny-negative (${\sim}{-}0.005$) during the plateau and transition, crossing to positive post-convergence. Bottom: loss (black) and gradient norm (orange) for context. Green dashed: $\tau$.}
+  \label{fig:hessian}
+\end{figure}
+
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=\textwidth]{outputs/paper_figures/fig_hessian_lambda_min_zoom.pdf}
+  \caption{\textbf{$\lambda_\text{min}$ zoom around $\tau$.} Red shading: $\lambda_\text{min} < 0$ (saddle). Blue shading: $\lambda_\text{min} > 0$ (local minimum). The plateau is a saddle point with $\lambda_\text{min} \approx -0.005$, while $\lambda_\text{max} \approx 5$--$50$. The negative curvature direction exists but is ${\sim}10^3\times$ weaker than the dominant positive curvature.}
+  \label{fig:hessian-zoom}
+\end{figure}
+
+\begin{table}[h]
+\centering
+\caption{\textbf{Hessian eigenvalues by phase} (typical values, excluding convergence outliers).}
+\label{tab:hessian}
+\vspace{4pt}
+\small
+\begin{tabular}{@{}lcccc@{}}
+\toprule
+Phase & $\lambda_\text{max}$ & $\lambda_\text{min}$ & $|\lambda_\text{max}/\lambda_\text{min}|$ & Geometry \\
+\midrule
+Plateau & $3$--$10$ & $-0.001$ to $-0.01$ & ${\sim}10^3$ & Saddle \\
+Transition & $30$--$80$ & $-0.002$ to $-0.02$ & ${\sim}10^4$ & Steep canyon \\
+Converged & $0.01$--$1$ & ${\sim}+0.0001$ & --- & Local min \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The mechanism is \emph{saddle-point escape}, not spinodal decomposition: the uniform-over-$K$ solution is never locally stable. Negative curvature directions exist throughout the plateau but are extremely shallow ($|\lambda_\text{min}|/\lambda_\text{max} \approx 10^{-3}$), hiding the escape route from the optimizer's isotropic random walk. The transition occurs when the walk aligns with a negative-curvature direction, triggering positive feedback (gradient coherence snap) and irreversible descent. The $10$--$20\times$ spike in $\lambda_\text{max}$ during the transition reflects the model passing through a narrow, steep loss canyon as it rapidly learns the binding circuit.
 
 
 \end{document}
