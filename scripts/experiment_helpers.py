@@ -1,12 +1,19 @@
 #!/usr/bin/env python
-"""Shared utilities for overnight experiment suites."""
+"""Shared utilities for overnight experiment suites.
+
+Includes a parallel runner that launches N independent training runs
+concurrently on the same GPU, vastly improving utilization for our
+tiny (~600K param) model.
+"""
 
 import sys
 import json
 import math
+import time
 import traceback
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List, Tuple
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 import torch
 from torch.utils.data import DataLoader
@@ -19,6 +26,10 @@ from src.data.dataset import MappingData, DisambiguationDataset, generate_mappin
 from src.model import create_model_from_config
 from src.training import train
 
+
+# ---------------------------------------------------------------------------
+# Config helpers
+# ---------------------------------------------------------------------------
 
 def make_config(
     experiment_name: str,
@@ -68,6 +79,10 @@ def make_config(
     })
 
 
+# ---------------------------------------------------------------------------
+# Run existence / history helpers
+# ---------------------------------------------------------------------------
+
 def run_exists(experiment_name, min_steps=0, output_dir="outputs"):
     """Check if a training run exists and reached min_steps."""
     p = Path(output_dir) / experiment_name / "training_history.json"
@@ -82,6 +97,42 @@ def run_exists(experiment_name, min_steps=0, output_dir="outputs"):
     except Exception:
         return False
 
+
+def load_history(experiment_name, output_dir="outputs"):
+    """Load training history from JSON."""
+    p = Path(output_dir) / experiment_name / "training_history.json"
+    if not p.exists():
+        return None
+    with open(p) as f:
+        return json.load(f)
+
+
+def detect_tau(history, log_k, key="candidate_loss", threshold_frac=0.5):
+    """Detect transition time tau from training history."""
+    if key not in history or not history[key]:
+        key = "first_target_loss"
+    if key not in history or not history[key]:
+        return None
+    threshold = threshold_frac * log_k
+    for s, v in zip(history["steps"], history[key]):
+        if v is not None and v < threshold:
+            return s
+    return None
+
+
+def detect_convergence(history, threshold=0.01, key="train_loss"):
+    """Detect convergence: first step where loss drops below threshold."""
+    if key not in history or not history[key]:
+        return None
+    for s, v in zip(history["steps"], history[key]):
+        if v < threshold:
+            return s
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Mapping save/load
+# ---------------------------------------------------------------------------
 
 def save_mapping(mapping_data, path):
     """Save MappingData to JSON for reuse across tasks."""
@@ -111,14 +162,13 @@ def load_mapping(path):
     )
 
 
+# ---------------------------------------------------------------------------
+# Single experiment runner (runs in-process)
+# ---------------------------------------------------------------------------
+
 def run_single_experiment(cfg, mapping_data=None, output_dir="outputs", model=None):
     """
-    Full training pipeline.
-
-    If mapping_data is provided, datasets are created from it with cfg.data.task
-    controlling tokenization. If model is provided, reuses it (for Transfer task).
-
-    Returns (model, history, mapping_data, tokenizer).
+    Full training pipeline. Returns (model, history, mapping_data, tokenizer).
     """
     torch.manual_seed(cfg.experiment.seed)
     if torch.cuda.is_available():
@@ -131,22 +181,15 @@ def run_single_experiment(cfg, mapping_data=None, output_dir="outputs", model=No
         train_ds, probe_ds, mapping_data = create_datasets_from_config(cfg, tokenizer)
     else:
         train_ds = DisambiguationDataset(
-            mapping_data=mapping_data,
-            tokenizer=tokenizer,
-            split="train",
-            probe_fraction=0.0,
-            seed=cfg.experiment.seed,
-            task=cfg.data.task,
+            mapping_data=mapping_data, tokenizer=tokenizer,
+            split="train", probe_fraction=0.0,
+            seed=cfg.experiment.seed, task=cfg.data.task,
             label_noise_prob=float(getattr(cfg.data, "label_noise_prob", 0.0)),
         )
-        # Empty probe set (probe_fraction=0.0 means probe split is empty)
         probe_ds = DisambiguationDataset(
-            mapping_data=mapping_data,
-            tokenizer=tokenizer,
-            split="probe",
-            probe_fraction=0.0,
-            seed=cfg.experiment.seed,
-            task=cfg.data.task,
+            mapping_data=mapping_data, tokenizer=tokenizer,
+            split="probe", probe_fraction=0.0,
+            seed=cfg.experiment.seed, task=cfg.data.task,
         )
 
     train_loader = DataLoader(
@@ -165,13 +208,12 @@ def run_single_experiment(cfg, mapping_data=None, output_dir="outputs", model=No
 
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
-
     config_path = out / cfg.experiment.name / "config.yaml"
     config_path.parent.mkdir(parents=True, exist_ok=True)
     with open(config_path, "w") as f:
         f.write(OmegaConf.to_yaml(cfg))
 
-    # Only do candidate eval for bz_to_a (requires correct mapping structure)
+    # Candidate eval only for bz_to_a
     if cfg.data.task == "bz_to_a":
         history = train(
             model=model, train_loader=train_loader, probe_loader=probe_loader,
@@ -187,43 +229,74 @@ def run_single_experiment(cfg, mapping_data=None, output_dir="outputs", model=No
     return model, history, mapping_data, tokenizer
 
 
-def detect_tau(history, log_k, key="candidate_loss", threshold_frac=0.5):
+# ---------------------------------------------------------------------------
+# Parallel runner: process-pool based GPU sharing
+# ---------------------------------------------------------------------------
+
+def _worker_run(job: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Detect transition time tau from training history.
+    Worker function for parallel execution. Each worker is a separate process
+    sharing the same GPU via CUDA. The tiny model means many fit concurrently.
 
-    Returns the first step where history[key] drops below threshold_frac * log_k.
-    Returns None if transition not detected.
+    job dict keys:
+        cfg_dict: serialized OmegaConf config (dict)
+        mapping_path: path to mapping JSON (or None to generate)
+        output_dir: output directory
+        name: experiment name (for logging)
     """
-    if key not in history or not history[key]:
-        # Fallback to first_target_loss
-        key = "first_target_loss"
-    if key not in history or not history[key]:
-        return None
-    threshold = threshold_frac * log_k
-    steps = history["steps"]
-    vals = history[key]
-    for s, v in zip(steps, vals):
-        if v is not None and v < threshold:
-            return s
-    return None
+    import os
+    os.environ.setdefault("CUDA_LAUNCH_BLOCKING", "0")
+
+    cfg = OmegaConf.create(job["cfg_dict"])
+    mapping_path = job.get("mapping_path")
+    output_dir = job.get("output_dir", "outputs")
+    name = job["name"]
+
+    t0 = time.time()
+    try:
+        mapping = load_mapping(mapping_path) if mapping_path else None
+        _, history, _, _ = run_single_experiment(
+            cfg, mapping_data=mapping, output_dir=output_dir,
+        )
+        elapsed = time.time() - t0
+        steps_done = history["steps"][-1] if history.get("steps") else 0
+        early = history.get("early_stopped", False)
+        tag = f" [early-stopped@{history.get('early_stopped_step', '?')}]" if early else ""
+        return {"name": name, "ok": True, "elapsed": elapsed,
+                "steps": steps_done, "tag": tag}
+    except Exception as e:
+        traceback.print_exc()
+        return {"name": name, "ok": False, "elapsed": time.time() - t0,
+                "error": str(e)}
 
 
-def detect_convergence(history, threshold=0.01, key="train_loss"):
-    """Detect convergence: first step where loss drops below threshold."""
-    if key not in history or not history[key]:
-        return None
-    steps = history["steps"]
-    vals = history[key]
-    for s, v in zip(steps, vals):
-        if v < threshold:
-            return s
-    return None
+def run_parallel(jobs: List[Dict[str, Any]], max_workers: int = 6,
+                 label: str = "batch"):
+    """
+    Run a list of training jobs in parallel using ProcessPoolExecutor.
 
+    Each job is a dict with keys: cfg_dict, mapping_path, output_dir, name.
+    max_workers controls concurrency (default 6 — good for 600K-param model
+    on a 24GB GPU).
+    """
+    if not jobs:
+        print(f"  [{label}] No jobs to run.")
+        return
 
-def load_history(experiment_name, output_dir="outputs"):
-    """Load training history from JSON."""
-    p = Path(output_dir) / experiment_name / "training_history.json"
-    if not p.exists():
-        return None
-    with open(p) as f:
-        return json.load(f)
+    n = len(jobs)
+    print(f"\n  [{label}] Launching {n} jobs with {max_workers} workers...")
+    t0 = time.time()
+
+    with ProcessPoolExecutor(max_workers=max_workers) as pool:
+        futures = {pool.submit(_worker_run, job): job["name"] for job in jobs}
+        for fut in as_completed(futures):
+            r = fut.result()
+            if r["ok"]:
+                print(f"    OK  {r['name']} — {r['steps']} steps, "
+                      f"{r['elapsed']:.0f}s{r.get('tag', '')}", flush=True)
+            else:
+                print(f"    FAIL {r['name']} — {r['error']}", flush=True)
+
+    total = time.time() - t0
+    print(f"  [{label}] {n} jobs done in {total:.0f}s "
+          f"({total/60:.1f}min)", flush=True)
