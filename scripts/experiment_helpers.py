@@ -13,6 +13,7 @@ import time
 import traceback
 from pathlib import Path
 from typing import Optional, Dict, Any, List, Tuple
+import multiprocessing as mp
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 import torch
@@ -287,7 +288,8 @@ def run_parallel(jobs: List[Dict[str, Any]], max_workers: int = 6,
     print(f"\n  [{label}] Launching {n} jobs with {max_workers} workers...")
     t0 = time.time()
 
-    with ProcessPoolExecutor(max_workers=max_workers) as pool:
+    ctx = mp.get_context("spawn")
+    with ProcessPoolExecutor(max_workers=max_workers, mp_context=ctx) as pool:
         futures = {pool.submit(_worker_run, job): job["name"] for job in jobs}
         for fut in as_completed(futures):
             r = fut.result()
