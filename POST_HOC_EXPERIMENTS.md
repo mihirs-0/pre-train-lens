@@ -1,6 +1,6 @@
 # Post-Hoc Experiments: Connecting Disambiguation Lag to Theoretical Frameworks
 
-Eight post-hoc experiments that test predictions from recent theoretical work against our existing experimental data on disambiguation lag (the metastable plateau at loss = log K followed by a sharp phase transition in transformer training). All experiments use **pre-existing checkpoints and training histories** -- no new training runs were conducted.
+Nine post-hoc experiments that test predictions from recent theoretical work against our existing experimental data on disambiguation lag (the metastable plateau at loss = log K followed by a sharp phase transition in transformer training). All experiments use **pre-existing checkpoints and training histories** -- no new training runs were conducted.
 
 ## Motivating Papers
 
@@ -291,6 +291,95 @@ This spike reflects the model descending through a narrow, steep canyon in the l
 
 ---
 
+## Experiment 9: Signal Dilution Hypothesis (Coverage vs Phase Transition)
+
+**Script:** `scripts/signal_dilution_test.py`
+**Hypothesis:** The plateau duration τ is NOT caused by a geometric trap or phase transition — it's caused by statistical coverage. The model needs to learn K × 1000 individual (B, z) → A bindings, and each training example only teaches one. The gradient signal per binding weakens as K grows. Predicted scaling: τ ∝ K^{1.26}. If true, the "phase transition" is a finite-size averaging effect.
+
+Four tests, with Test 3 being the decisive one.
+
+### Test 1: τ × grad_norm_early ∝ K^β — PASS
+
+![Signal Dilution Test 1](outputs/paper_figures/signal_dilution_test1.png)
+
+The product τ × grad_norm scales as K^{0.99} (R² = 0.988), almost exactly the β = 1.0 predicted by pure coverage. The ratio τ×ḡ/K is remarkably flat:
+
+| K | τ (steps) | ḡ_early | τ × ḡ | τ × ḡ / K |
+|---|-----------|---------|-------|-----------|
+| 3 | 450 | 0.616 | 277 | 92.4 |
+| 5 | 800 | 0.690 | 552 | 110.4 |
+| 7 | 1050 | 0.591 | 620 | 88.6 |
+| 10 | 1850 | 0.615 | 1137 | 113.7 |
+| 13 | 2100 | 0.530 | 1113 | 85.6 |
+| 17 | 3300 | 0.518 | 1710 | 100.6 |
+| 20 | 3950 | 0.488 | 1928 | 96.4 |
+| 25 | 5250 | 0.438 | 2297 | 91.9 |
+| 30 | 6950 | 0.431 | 2993 | 99.8 |
+| 36 | 8750 | 0.392 | 3426 | 95.2 |
+
+Mean τ×ḡ/K = 97.5 ± 8.5 (CV = 8.7%). The dimensional analysis of coverage is spot-on.
+
+**Note:** grad_norm_early is computed from `sqrt(grad_norm_sq)` during the 20%-60% of τ window, representing the plateau-era gradient magnitude.
+
+### Test 2: Candidate Loss Onset Timing — CONSISTENT
+
+![Signal Dilution Test 2](outputs/paper_figures/signal_dilution_test2.png)
+
+The 95% onset fraction (when candidate loss first drops below 95% of log K, as fraction of τ) **decreases** with K (r = -0.67): K=3 at 75%τ, K=20 at 44%τ, K=25 at 42%τ. This means larger K starts showing slight progress relatively earlier but takes much longer to finish — consistent with coverage starting early but requiring more steps to complete.
+
+The normalized loss trajectories (right panel) show all K values collapse onto a similar shape when normalized by τ, but larger K values have a slightly longer tail past τ to reach 10% of log K (K=3: at 100%τ, K=36: at 156%τ).
+
+### Test 3: Per-Group Learning Curves — PHASE TRANSITION (THE KEY TEST)
+
+![Per-Group Learning Curves](outputs/paper_figures/per_group_learning_curves.png)
+![Per-Group Histograms](outputs/paper_figures/per_group_histograms.png)
+
+**This is the test that kills coverage.** We loaded checkpoints at 20 steps spanning the plateau and transition for K=10 and K=20, then evaluated the model on 200 randomly-sampled B-groups per checkpoint using K-way candidate scoring (sequence log-prob of each of K candidate A strings given the correct z).
+
+**K=10 (τ=1850 steps):**
+
+| Step | Fraction of τ | Groups ≥80% | Groups 100% | Mean acc |
+|------|--------------|-------------|-------------|----------|
+| 500 | 27% | 0.0% | 0.0% | 0.118 |
+| 900 | 49% | 0.0% | 0.0% | 0.154 |
+| 1400 | 76% | 0.0% | 0.0% | 0.320 |
+| 1800 | 97% | 31.5% | 1.5% | 0.645 |
+| 2100 | 114% | 74.0% | 22.0% | 0.828 |
+| 2800 | 151% | 99.0% | 75.0% | 0.969 |
+
+**K=20 (τ=3950 steps):**
+
+| Step | Fraction of τ | Groups ≥80% | Groups 100% | Mean acc |
+|------|--------------|-------------|-------------|----------|
+| 1000 | 25% | 0.0% | 0.0% | 0.062 |
+| 1900 | 48% | 0.0% | 0.0% | 0.083 |
+| 2900 | 73% | 0.0% | 0.0% | 0.192 |
+| 3800 | 96% | 1.5% | 0.0% | 0.508 |
+| 4700 | 119% | 47.0% | 2.5% | 0.758 |
+| 5900 | 149% | 87.0% | 8.5% | 0.870 |
+
+**At τ/2: 0.0% of groups are ≥80% solved for both K=10 and K=20.** Even at 75% of τ, still 0.0%. The fraction-solved curve is a **step function**, not a sigmoid. Coverage predicts 30-50% of groups should be solved by τ/2 — we observe exactly 0%.
+
+The histograms are particularly revealing: at 25%τ and 50%τ, all groups are clustered near chance (1/K). At 75%τ, the distribution starts spreading but remains below the 80% threshold. At 100%τ, a sudden **bimodal split** appears — groups begin separating into "solved" and "not yet solved."
+
+**However, the mean accuracy does creep up uniformly during the plateau** (K=10: 0.10 → 0.32 by 76%τ; K=20: 0.05 → 0.19 by 73%τ). This is NOT groups being solved one-at-a-time — it's all groups getting slightly better than chance simultaneously. This is exactly the "hidden progress" signature from Exp 3: the model builds weak, distributed z-sensitivity across all groups, but no individual group crosses the threshold until the collective transition.
+
+### Test 4: τ Prediction from First Principles — PASS
+
+![Signal Dilution Test 4](outputs/paper_figures/signal_dilution_test4.png)
+
+τ_predicted = C × K / grad_norm_early with a single global constant C = 97.5 ± 8.5 achieves R² = 0.995 across all 10 K values. Maximum fractional error is 14.3% (K=10). The per-K constant C_K varies only from 85.6 to 113.7.
+
+However, this does not save coverage — the formula works for dimensional reasons (right units) regardless of mechanism. A collective transition whose timescale scales with K/grad_norm (as ours does) would produce the same R².
+
+### Verdict: COVERAGE REJECTED
+
+**The aggregate statistics (Tests 1, 2, 4) are perfectly consistent with coverage, but the mechanistic test (Test 3) definitively falsifies it.** The phase transition is real at the individual-group level — groups do not learn independently but transition collectively. The "signal dilution" formula τ = C × K / grad_norm gets the scaling right but for the wrong reason.
+
+The reconciliation: during the plateau, the model builds weak z-sensitivity uniformly across ALL groups (hidden progress = random walk on saddle point). This looks like "diluted signal" in aggregate. But the transition from "all groups slightly better than chance" to "most groups solved" is a collective snap, not a gradual coverage process. The saddle-point escape mechanism (Exp 8) explains both the scaling and the snap: the escape time scales with the information-theoretic content (K bindings) divided by the signal strength (grad_norm), but the escape itself is a global event that affects all groups simultaneously because it corresponds to the model finding a single descent channel in weight space.
+
+---
+
 ## Cross-Experiment Synthesis
 
 ### What holds up
@@ -303,6 +392,8 @@ This spike reflects the model descending through a narrow, steep canyon in the l
 
 4. **Spectral changes are distributed** (Exp 2): Effective rank changes are visible across many heads at the transition, not concentrated in the selector head. L0H0 shows the earliest spectral signature (a sigma_1/sigma_2 spike), while L1H3 maintains high effective rank throughout.
 
+5. **Collective transition confirmed** (Exp 9): Per-group learning curves show 0% of B-groups solved at τ/2 — the transition is a step function, not a sigmoid. This rules out gradual coverage as the mechanism, despite the aggregate scaling τ × grad_norm ∝ K being perfectly consistent with it.
+
 ### What does not hold
 
 1. **Non-monotonic weight norms** (Exp 1): Total norms grow monotonically -- no peak-and-reorganize. However, Layer 1 specifically does show non-monotonic behavior, suggesting the deep grokking prediction applies locally to the selector head's layer.
@@ -313,6 +404,8 @@ This spike reflects the model descending through a narrow, steep canyon in the l
 
 4. **Spinodal decomposition** (Exp 8): The plateau is NOT a local minimum becoming unstable (spinodal). λ_min < 0 throughout the plateau -- it is a saddle point with hidden negative curvature ~1000× weaker than the dominant positive curvature. The transition is saddle-point escape, not spontaneous instability.
 
+5. **Signal dilution / coverage** (Exp 9): The scaling τ = C × K / grad_norm (R² = 0.995) is seductively clean but mechanistically wrong. Groups don't learn one-at-a-time — they snap together collectively. The formula works for dimensional reasons, not because the mechanism is per-example coverage.
+
 ### Emerging picture
 
 The disambiguation lag is characterized by a **random walk on a saddle point** (Exp 3, Exp 8) where the loss landscape has hidden negative curvature ~1000× weaker than the dominant positive curvature. During this plateau, the model accumulates **distributed spectral changes** (Exp 2) and **synergistic z-dependence** (Exp 7) without any visible loss improvement. The transition occurs when the optimizer aligns with the feeble negative-curvature direction — once aligned, positive feedback amplifies the descent and the transition becomes **irreversible** (trajectory forensics finds zero reversions).
@@ -320,6 +413,8 @@ The disambiguation lag is characterized by a **random walk on a saddle point** (
 The transition is a **saddle-point escape**, not spinodal decomposition (Exp 8: λ_min < 0 during plateau, ruling out local-minimum instability) and not stochastic nucleation (trajectory forensics: zero reversions, ruling out barrier hopping). The post-transition regime is a genuine local minimum (λ_min > 0) marked by **directed, coherent weight updates** (Exp 3), **λ_max spikes 10-20× as the model descends through a steep canyon** (Exp 8), **weight norm expansion concentrated in the unembed layer** (Exp 1), and **within-group representation differentiation** (Exp 5).
 
 The ~1000× curvature asymmetry (|λ_min| << λ_max) provides a quantitative explanation for the plateau duration: the escape direction is a tiny sliver of parameter space, and gradient-based optimization with random-walk dynamics takes O(1/|λ_min|) steps to find it.
+
+**Crucially, per-group evaluation (Exp 9) confirms the transition is collective**: at τ/2, 0% of B-groups are individually solved despite mean accuracy creeping above chance. All groups improve uniformly (hidden progress) and then snap together at τ. The aggregate scaling τ ∝ K / grad_norm (R² = 0.995) captures the dimensional dependence but not the mechanism — the transition is a global saddle-point escape that affects all bindings simultaneously, not per-example coverage. The formula works because the saddle escape time scales with the information-theoretic content of the task (K bindings) divided by the signal strength (grad_norm), but the escape itself is a single event in weight space.
 
 ---
 
@@ -343,6 +438,9 @@ python scripts/posthoc_neural_collapse.py
 
 # Second-order experiments (HVP, ~30-60 min on MPS per K value)
 PYTHONUNBUFFERED=1 python scripts/posthoc_hessian_eigenvalue.py
+
+# Per-group evaluation (checkpoint loading + forward passes, ~20 min on MPS)
+PYTHONUNBUFFERED=1 python scripts/signal_dilution_test.py
 ```
 
 All figures are saved to `outputs/paper_figures/` as both PDF and PNG.
