@@ -45,21 +45,26 @@ def make_config(
     label_noise_prob: float = 0.0,
     early_stop_frac: Optional[float] = None,
     weight_decay: float = 0.01,
-    warmup_steps: int = 500,
+    warmup_steps: int = 0,
     n_unique_b: int = 1000,
     z_length: int = 2,
     optimizer_type: str = "adamw",
     momentum: float = 0.0,
 ):
-    """Create an OmegaConf config matching the Hydra config schema."""
+    """Create an OmegaConf config matching the Hydra config schema.
+
+    Defaults match the baseline landauer_dense experiments:
+    split_by_base=True, enforce_unique_a_first_char_per_b=True,
+    warmup_steps=0, scheduler=constant.
+    """
     return OmegaConf.create({
         "experiment": {"name": experiment_name, "seed": seed},
         "data": {
             "n_unique_b": n_unique_b, "k": k, "task": task,
             "b_length": 6, "a_length": 4, "z_length": z_length,
             "vocab_chars": "abcdefghijklmnopqrstuvwxyz0123456789",
-            "probe_fraction": 0.0, "split_by_base": False,
-            "enforce_unique_a_first_char_per_b": False,
+            "probe_fraction": 0.0, "split_by_base": True,
+            "enforce_unique_a_first_char_per_b": True,
             "disambiguation_prefix_length": 1,
             "label_noise_prob": label_noise_prob,
         },
@@ -75,7 +80,7 @@ def make_config(
             "batch_size": bs, "learning_rate": lr,
             "weight_decay": weight_decay,
             "max_steps": max_steps, "warmup_steps": warmup_steps,
-            "scheduler": "cosine",
+            "scheduler": "constant",
             "checkpoint_every": checkpoint_every,
             "eval_every": eval_every,
             "early_stop_convergence_frac": early_stop_frac,
