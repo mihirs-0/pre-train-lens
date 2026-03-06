@@ -11,6 +11,7 @@ from .random_z_eval import RandomZEvalProbe
 from .gradient_snr import GradientSNRProbe
 from .isotropy import IsotropyProbe
 from .multihead_decomposition import MultiheadDecompositionProbe
+from .head_ablation import HeadAblationProbe
 
 
 # Registry of all available probes
@@ -22,6 +23,7 @@ PROBE_REGISTRY: Dict[str, Type[BaseProbe]] = {
     "gradient_snr": GradientSNRProbe,
     "isotropy": IsotropyProbe,
     "multihead_decomposition": MultiheadDecompositionProbe,
+    "head_ablation": HeadAblationProbe,
 }
 
 

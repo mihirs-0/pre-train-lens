@@ -46,13 +46,17 @@ def make_config(
     early_stop_frac: Optional[float] = None,
     weight_decay: float = 0.01,
     warmup_steps: int = 500,
+    n_unique_b: int = 1000,
+    z_length: int = 2,
+    optimizer_type: str = "adamw",
+    momentum: float = 0.0,
 ):
     """Create an OmegaConf config matching the Hydra config schema."""
     return OmegaConf.create({
         "experiment": {"name": experiment_name, "seed": seed},
         "data": {
-            "n_unique_b": 1000, "k": k, "task": task,
-            "b_length": 6, "a_length": 4, "z_length": 2,
+            "n_unique_b": n_unique_b, "k": k, "task": task,
+            "b_length": 6, "a_length": 4, "z_length": z_length,
             "vocab_chars": "abcdefghijklmnopqrstuvwxyz0123456789",
             "probe_fraction": 0.0, "split_by_base": False,
             "enforce_unique_a_first_char_per_b": False,
@@ -75,6 +79,8 @@ def make_config(
             "checkpoint_every": checkpoint_every,
             "eval_every": eval_every,
             "early_stop_convergence_frac": early_stop_frac,
+            "optimizer_type": optimizer_type,
+            "momentum": momentum,
         },
         "output": {"base_dir": "outputs"},
     })
@@ -214,17 +220,27 @@ def run_single_experiment(cfg, mapping_data=None, output_dir="outputs", model=No
     with open(config_path, "w") as f:
         f.write(OmegaConf.to_yaml(cfg))
 
+    # Resolve optimizer settings from config
+    _opt_type = getattr(cfg.training, "optimizer_type", "adamw")
+    _opt_kwargs = {}
+    if _opt_type == "sgd":
+        _mom = float(getattr(cfg.training, "momentum", 0.0))
+        if _mom > 0:
+            _opt_kwargs["momentum"] = _mom
+
     # Candidate eval only for bz_to_a
     if cfg.data.task == "bz_to_a":
         history = train(
             model=model, train_loader=train_loader, probe_loader=probe_loader,
             cfg=cfg, output_dir=out, grad_clip=1.0,
+            optimizer_type=_opt_type, optimizer_kwargs=_opt_kwargs,
             mapping_data=mapping_data, tokenizer=tokenizer,
         )
     else:
         history = train(
             model=model, train_loader=train_loader, probe_loader=probe_loader,
             cfg=cfg, output_dir=out, grad_clip=1.0,
+            optimizer_type=_opt_type, optimizer_kwargs=_opt_kwargs,
         )
 
     return model, history, mapping_data, tokenizer
