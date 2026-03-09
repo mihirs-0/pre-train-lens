@@ -64,7 +64,7 @@ def main():
             # Try to use existing baseline
             found = False
             for name in BASELINE_NAMES:
-                if run_exists(name, min_steps=MAX_STEPS * 0.5, output_dir=OUTPUT_DIR):
+                if run_exists(name, min_steps=1000, output_dir=OUTPUT_DIR):
                     run_names[z_len] = name
                     print(f"  z_length={z_len}: EXISTING {name}")
                     found = True
@@ -75,7 +75,7 @@ def main():
         name = f"selector_zlen{z_len}_K{K}"
         run_names[z_len] = name
 
-        if run_exists(name, min_steps=MAX_STEPS * 0.5, output_dir=OUTPUT_DIR):
+        if run_exists(name, min_steps=1000, output_dir=OUTPUT_DIR):
             print(f"  z_length={z_len}: EXISTING {name}")
             continue
 
@@ -103,8 +103,9 @@ def main():
         print("  All runs already exist!")
 
     # ── Analyze ────────────────────────────────────────────────────────────
-    print(f"\n{'z_length':<10} {'Run':<28} {'τ':>8} {'Plateau loss':>14} {'Final loss':>12}")
-    print("-" * 76)
+    print(f"\n{'z_length':<10} {'Run':<28} {'τ':>8} {'Cand plateau':>14} "
+          f"{'Cand/logK':>10} {'Final cand':>12}")
+    print("-" * 88)
 
     log_k = math.log(K)
     results = {}
@@ -119,36 +120,48 @@ def main():
             continue
 
         tau = detect_tau(h, log_k)
-        # Plateau loss: average first_target_loss in steps 100-500
-        early_steps = [(s, l) for s, l in zip(h["steps"], h["first_target_loss"])
-                       if 100 <= s <= 500]
-        plateau_loss = np.mean([l for _, l in early_steps]) if early_steps else None
-        final_loss = h["first_target_loss"][-1] if h["first_target_loss"] else None
+
+        # Use candidate_loss for plateau measurement (theory: plateaus at log K)
+        cand_key = "candidate_loss" if "candidate_loss" in h and h["candidate_loss"] else "first_target_loss"
+        early_cand = [(s, l) for s, l in zip(h["steps"], h[cand_key])
+                      if 100 <= s <= 500 and l is not None]
+        plateau_cand = np.mean([l for _, l in early_cand]) if early_cand else None
+        final_cand = h[cand_key][-1] if h[cand_key] else None
+
+        # Also measure first_target_loss for reference
+        early_ft = [(s, l) for s, l in zip(h["steps"], h["first_target_loss"])
+                    if 100 <= s <= 500]
+        plateau_ft = np.mean([l for _, l in early_ft]) if early_ft else None
 
         results[z_len] = {
             "run_name": name,
             "tau": tau,
-            "plateau_loss": float(plateau_loss) if plateau_loss is not None else None,
-            "final_loss": float(final_loss) if final_loss is not None else None,
-            "plateau_over_logk": float(plateau_loss / log_k) if plateau_loss else None,
+            "candidate_plateau": float(plateau_cand) if plateau_cand is not None else None,
+            "candidate_plateau_over_logk": float(plateau_cand / log_k) if plateau_cand else None,
+            "first_target_plateau": float(plateau_ft) if plateau_ft is not None else None,
+            "final_candidate_loss": float(final_cand) if final_cand is not None else None,
         }
 
         tau_str = str(tau) if tau else "N/A"
-        pl_str = f"{plateau_loss:.3f}" if plateau_loss else "N/A"
-        fl_str = f"{final_loss:.4f}" if final_loss else "N/A"
-        print(f"  {z_len:<10} {name:<28} {tau_str:>8} {pl_str:>14} {fl_str:>12}")
+        cp_str = f"{plateau_cand:.3f}" if plateau_cand is not None else "N/A"
+        cr_str = f"{plateau_cand / log_k:.3f}" if plateau_cand else "N/A"
+        fc_str = f"{final_cand:.4f}" if final_cand is not None else "N/A"
+        print(f"  {z_len:<10} {name:<28} {tau_str:>8} {cp_str:>14} "
+              f"{cr_str:>10} {fc_str:>12}")
 
     # Summary
     if results:
         print(f"\n  log K = {log_k:.3f}")
+        print(f"  Theory predicts candidate_loss plateau ≈ log K")
         for z_len, r in sorted(results.items()):
-            if r["plateau_over_logk"] is not None:
-                print(f"  z_length={z_len}: plateau/log K = {r['plateau_over_logk']:.3f}")
+            if r["candidate_plateau_over_logk"] is not None:
+                print(f"  z_length={z_len}: candidate_plateau / log K = "
+                      f"{r['candidate_plateau_over_logk']:.3f}")
 
     # ── Figure ─────────────────────────────────────────────────────────────
     fig, axes = plt.subplots(1, 2, figsize=(11, 4))
 
-    # Panel A: Loss curves
+    # Panel A: Candidate loss curves (theory: plateau at log K)
     ax = axes[0]
     colors = {1: "#E74C3C", 2: "#3498DB", 3: "#2ECC71", 4: "#9B59B6"}
     for z_len in Z_LENGTHS:
@@ -158,14 +171,15 @@ def main():
         h = load_history(name, OUTPUT_DIR)
         if h is None:
             continue
-        ax.plot(h["steps"], h["first_target_loss"],
+        loss_key = "candidate_loss" if "candidate_loss" in h and h["candidate_loss"] else "first_target_loss"
+        ax.plot(h["steps"], h[loss_key],
                 color=colors.get(z_len, "gray"), linewidth=1.2,
                 label=f"z_length={z_len}")
 
     ax.axhline(log_k, color="gray", linestyle=":", alpha=0.5, label=f"log K = {log_k:.2f}")
     ax.set_xlabel("Step", fontsize=10)
-    ax.set_ylabel("First target loss", fontsize=10)
-    ax.set_title(f"K={K}: Loss by z_length", fontsize=11, fontweight="bold")
+    ax.set_ylabel("Candidate loss", fontsize=10)
+    ax.set_title(f"K={K}: Candidate loss by z_length", fontsize=11, fontweight="bold")
     ax.legend(fontsize=8)
     ax.tick_params(labelsize=8)
 

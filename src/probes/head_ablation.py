@@ -123,7 +123,7 @@ class HeadAblationProbe(BaseProbe):
                 for batch in batches:
                     _, cache = model.run_with_cache(batch["input_ids"])
                     for layer in range(n_layers):
-                        key = f"blocks.{layer}.attn.hook_result"
+                        key = f"blocks.{layer}.attn.hook_z"
                         act = cache[key]  # (batch, seq, n_heads, d_head)
                         for head in range(n_heads):
                             hkey = (layer, head)
@@ -159,7 +159,7 @@ class HeadAblationProbe(BaseProbe):
                                     return activation
                                 return hook_fn
 
-                            hook_name = f"blocks.{layer}.attn.hook_result"
+                            hook_name = f"blocks.{layer}.attn.hook_z"
                             logits = model.run_with_hooks(
                                 batch["input_ids"],
                                 fwd_hooks=[(hook_name, make_hook(layer, head, abl_type))],
@@ -205,7 +205,7 @@ class HeadAblationProbe(BaseProbe):
                                         return activation
                                     return hook_fn
                                 hooks.append(
-                                    (f"blocks.{l2}.attn.hook_result",
+                                    (f"blocks.{l2}.attn.hook_z",
                                      make_zero_hook(h2))
                                 )
 
